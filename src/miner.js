@@ -167,6 +167,10 @@ export async function runWorker(privateKey, label) {
 
   let mintsCount = 0;
   let currentEpoch = 0n;
+  // Session-level counters (across all rounds)
+  const sessionStart = Date.now();
+  let sessionHashes  = 0n;
+  let sessionFinds   = 0;
 
   while (true) {
     const block = await rpcPool.call('getBlockNumber');
@@ -222,9 +226,16 @@ export async function runWorker(privateKey, label) {
           batchSize:    config.GPU_BATCH,
           shouldStop:   () => false,
           onProgress: ({ totalHashes, hps, dur }) => {
-            const mh = (Number(totalHashes) / 1e6).toFixed(1);
-            const mhs = (hps / 1e6).toFixed(1);
-            process.stdout.write(chalk.gray(`     ${label} ${mh}M tries · ${mhs} MH/s · ${dur.toFixed(0)}s\n`));
+            // Cumulative session display
+            const cumHashes = sessionHashes + totalHashes;
+            const cumDur    = (Date.now() - sessionStart) / 1000;
+            const cumHps    = Number(cumHashes) / cumDur;
+            const mh        = (Number(cumHashes) / 1e6).toFixed(1);
+            const rate      = cumHps >= 1e9
+              ? (cumHps / 1e9).toFixed(2) + ' GH/s'
+              : (cumHps / 1e6).toFixed(1) + ' MH/s';
+            const findsTxt  = sessionFinds > 0 ? ` · ${sessionFinds} finds` : '';
+            process.stdout.write(chalk.gray(`     ${label} ${mh}M tries · ${rate} · ${cumDur.toFixed(0)}s${findsTxt}\n`));
           },
         });
         // adapt fields
@@ -248,18 +259,21 @@ export async function runWorker(privateKey, label) {
 
     const dur = ((Date.now() - startMine) / 1000).toFixed(1);
     if (!result.found) {
-      const rateStr = config.USE_GPU
-        ? `${(result.hashesPerSec / 1e6).toFixed(1)} MH/s`
-        : `${(result.hashesPerSec / 1000).toFixed(0)} KH/s`;
-      console.log(chalk.gray(`  ${label} no result in ${dur}s @ ${rateStr}`));
+      sessionHashes += BigInt(result.totalHashes || 0n);
+      const cumDur = (Date.now() - sessionStart) / 1000;
+      const cumHps = Number(sessionHashes) / cumDur;
+      const rateStr = cumHps >= 1e9 ? `${(cumHps/1e9).toFixed(2)} GH/s` : `${(cumHps/1e6).toFixed(1)} MH/s`;
+      console.log(chalk.gray(`  ${label} no result this round · session ${(Number(sessionHashes)/1e9).toFixed(1)}B @ ${rateStr}`));
       continue;
     }
 
-    const totalMh = (Number(result.totalHashes) / 1e6).toFixed(2);
-    const rateStr = config.USE_GPU
-      ? `${(result.hashesPerSec / 1e6).toFixed(1)} MH/s`
-      : `${(result.hashesPerSec / 1000).toFixed(0)} KH/s`;
-    console.log(chalk.green(`  ✓ ${label} FOUND nonce after ${totalMh}M hashes in ${dur}s @ ${rateStr}`));
+    sessionHashes += BigInt(result.totalHashes);
+    sessionFinds++;
+    const cumDur = (Date.now() - sessionStart) / 1000;
+    const cumHps = Number(sessionHashes) / cumDur;
+    const cumGH  = (Number(sessionHashes) / 1e9).toFixed(1);
+    const rateStr = cumHps >= 1e9 ? `${(cumHps/1e9).toFixed(2)} GH/s` : `${(cumHps/1e6).toFixed(1)} MH/s`;
+    console.log(chalk.green(`  ✓ ${label} FOUND #${sessionFinds} after ${dur}s round · session ${cumGH}B in ${cumDur.toFixed(0)}s @ ${rateStr}`));
 
     // Verify epoch & block cap before submit
     const blockNow = await rpcPool.call('getBlockNumber');
