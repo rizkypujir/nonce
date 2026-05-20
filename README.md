@@ -25,6 +25,16 @@ clinfo -l           # semua GPU (Linux)
 
 ## Install
 
+### One-click (VPS fresh, recommended):
+```bash
+git clone https://github.com/rizkypujir/nonce.git
+cd nonce
+bash setup.sh
+```
+
+Script otomatis install: Node.js, GPU driver, OpenCL, npm deps, config. Tinggal isi `wallets.txt`.
+
+### Manual:
 ```bash
 git clone https://github.com/rizkypujir/nonce.git
 cd nonce
@@ -33,7 +43,7 @@ cp .env.example .env
 cp wallets.txt.example wallets.txt
 ```
 
-Edit `.env` dan `wallets.txt` sesuai setup lo.
+Edit `wallets.txt` — tambah private key (1 per baris).
 
 ---
 
