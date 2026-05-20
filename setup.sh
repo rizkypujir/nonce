@@ -5,7 +5,8 @@
 #  Run: bash setup.sh
 # ═══════════════════════════════════════════════════════════
 
-set -e
+# Don't exit on error — handle failures gracefully
+set +e
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -27,11 +28,11 @@ echo ""
 # ─── 1. System update ──────────────────────────────────────
 echo -e "${YELLOW}[1/7] System packages...${NC}"
 if command -v apt &>/dev/null; then
-  sudo apt update -qq 2>/dev/null
-  sudo apt install -y -qq curl wget git build-essential ca-certificates 2>/dev/null
+  apt-get update -qq || true
+  apt-get install -y curl wget git build-essential ca-certificates || true
   log "apt packages ready"
 elif command -v yum &>/dev/null; then
-  sudo yum install -y -q curl wget git gcc gcc-c++ make ca-certificates 2>/dev/null
+  yum install -y curl wget git gcc gcc-c++ make ca-certificates || true
   log "yum packages ready"
 else
   warn "Unknown package manager — skipping system packages"
@@ -47,13 +48,13 @@ if command -v node &>/dev/null; then
     skip "Node.js $NODE_VER"
   else
     warn "Node.js $NODE_VER too old, upgrading..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
-    sudo apt install -y -qq nodejs 2>/dev/null
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>/dev/null
+    apt-get install -y -qq nodejs 2>/dev/null
     log "Node.js $(node --version) installed"
   fi
 else
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
-  sudo apt install -y -qq nodejs 2>/dev/null
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>/dev/null
+  apt-get install -y -qq nodejs 2>/dev/null
   log "Node.js $(node --version) installed"
 fi
 
@@ -72,7 +73,7 @@ elif lspci 2>/dev/null | grep -qi nvidia; then
   GPU_TYPE="nvidia"
   warn "NVIDIA GPU detected but driver not installed"
   echo "  Installing NVIDIA driver..."
-  sudo apt install -y -qq nvidia-driver-570 2>/dev/null || sudo apt install -y -qq nvidia-driver-535 2>/dev/null
+  apt-get install -y -qq nvidia-driver-570 2>/dev/null || apt-get install -y -qq nvidia-driver-535 2>/dev/null
   log "NVIDIA driver installed (reboot may be needed)"
 elif lspci 2>/dev/null | grep -qi amd; then
   GPU_TYPE="amd"
@@ -90,15 +91,15 @@ echo -e "${YELLOW}[4/7] OpenCL runtime...${NC}"
 if [ -f /usr/lib/x86_64-linux-gnu/libOpenCL.so.1 ] || [ -f /usr/lib64/libOpenCL.so.1 ]; then
   skip "libOpenCL.so.1"
 else
-  sudo apt install -y -qq ocl-icd-libopencl1 ocl-icd-opencl-dev 2>/dev/null
+  apt-get install -y -qq ocl-icd-libopencl1 ocl-icd-opencl-dev 2>/dev/null
   log "OpenCL loader installed"
 fi
 
 # Register NVIDIA ICD if needed
 if [ "$GPU_TYPE" = "nvidia" ]; then
   if [ ! -f /etc/OpenCL/vendors/nvidia.icd ]; then
-    sudo mkdir -p /etc/OpenCL/vendors
-    echo "libnvidia-opencl.so.1" | sudo tee /etc/OpenCL/vendors/nvidia.icd >/dev/null
+    mkdir -p /etc/OpenCL/vendors
+    echo "libnvidia-opencl.so.1" | tee /etc/OpenCL/vendors/nvidia.icd >/dev/null
     log "NVIDIA OpenCL ICD registered"
   else
     skip "NVIDIA ICD"
@@ -108,9 +109,9 @@ if [ "$GPU_TYPE" = "nvidia" ]; then
   if ! ldconfig -p 2>/dev/null | grep -q libnvidia-opencl; then
     DRIVER_PKG=$(dpkg -l | grep -oP 'nvidia-driver-\d+' | head -1 | sed 's/driver/compute/')
     if [ -n "$DRIVER_PKG" ]; then
-      sudo apt install -y -qq "$DRIVER_PKG" 2>/dev/null
+      apt-get install -y -qq "$DRIVER_PKG" 2>/dev/null
     else
-      sudo apt install -y -qq libnvidia-compute-570 2>/dev/null || sudo apt install -y -qq libnvidia-compute-535 2>/dev/null
+      apt-get install -y -qq libnvidia-compute-570 2>/dev/null || apt-get install -y -qq libnvidia-compute-535 2>/dev/null
     fi
     log "libnvidia-compute installed"
   else
@@ -121,7 +122,7 @@ fi
 # AMD OpenCL
 if [ "$GPU_TYPE" = "amd" ]; then
   if ! ldconfig -p 2>/dev/null | grep -q libMesaOpenCL; then
-    sudo apt install -y -qq mesa-opencl-icd 2>/dev/null
+    apt-get install -y -qq mesa-opencl-icd 2>/dev/null
     log "AMD Mesa OpenCL installed"
   else
     skip "AMD OpenCL"
@@ -139,7 +140,7 @@ if command -v clinfo &>/dev/null; then
     warn "OpenCL installed but no devices found (driver issue?)"
   fi
 else
-  sudo apt install -y -qq clinfo 2>/dev/null
+  apt-get install -y -qq clinfo 2>/dev/null
   clinfo -l 2>/dev/null | head -10 || warn "clinfo failed"
 fi
 
