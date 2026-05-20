@@ -30,7 +30,33 @@ let cl  = null;
 
 function bind() {
   if (cl) return cl;
-  lib = koffi.load('OpenCL');
+  // Try multiple library names (Windows, Linux variants)
+  const candidates = [
+    'OpenCL',                           // Windows: OpenCL.dll
+    'libOpenCL.so.1',                   // Linux standard (ocl-icd)
+    'libOpenCL.so',                     // Linux symlink
+    '/usr/lib/x86_64-linux-gnu/libOpenCL.so.1',  // Ubuntu/Debian explicit
+    '/usr/lib64/libOpenCL.so.1',        // RHEL/CentOS
+    '/usr/local/cuda/lib64/libOpenCL.so', // CUDA bundled
+    '/usr/local/cuda/lib64/libOpenCL.so.1',
+  ];
+  let lastErr = null;
+  for (const name of candidates) {
+    try {
+      lib = koffi.load(name);
+      break;
+    } catch (e) {
+      lastErr = e;
+      lib = null;
+    }
+  }
+  if (!lib) {
+    throw new Error(
+      `Cannot load OpenCL library. Tried: ${candidates.join(', ')}. ` +
+      `On Ubuntu/Debian: apt install -y ocl-icd-libopencl1 clinfo. ` +
+      `Last error: ${lastErr?.message || 'unknown'}`
+    );
+  }
   cl = {
     GetPlatformIDs:   lib.func('clGetPlatformIDs',   'int', ['uint32', 'void *', '_Out_ uint32 *']),
     GetPlatformInfo:  lib.func('clGetPlatformInfo',  'int', ['void *', 'uint32', 'size_t', 'void *', '_Out_ size_t *']),
