@@ -20,6 +20,7 @@ import { CONTRACT, CHAIN_ID, EPOCH_BLOCKS, MAX_MINTS_PER_BLOCK, ABI, config } fr
 import { rpcPool, getWalletClient } from './rpc.js';
 import { gpuMineEpoch, ensureGPU, gpuInfo } from './gpu/gpuWorker.js';
 import { multiGpuMineEpoch, ensureMultiGPU, multiGpuInfo, gpuCount } from './gpu/gpuMulti.js';
+import { cpuMineEpoch, cpuThreadCount } from './cpu/cpuMiner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -224,7 +225,8 @@ export async function runWorker(privateKey, label) {
       if (config.USE_GPU) {
         console.log(chalk.gray(`  ⛏  ${label} epoch ${epochAtStart} GPU ${gpuName} (diff 2^${diffLog2})...`));
         const mineFn = config.MULTI_GPU ? multiGpuMineEpoch : gpuMineEpoch;
-        result = await mineFn({
+
+        const mineOpts = {
           chainId:      CHAIN_ID,
           contractAddr: CONTRACT,
           minerAddr:    account.address,
@@ -234,7 +236,6 @@ export async function runWorker(privateKey, label) {
           maxGPUs:      config.MAX_GPUS,
           shouldStop:   () => false,
           onProgress: ({ totalHashes, hps, dur }) => {
-            // Cumulative session display
             const cumHashes = sessionHashes + totalHashes;
             const cumDur    = (Date.now() - sessionStart) / 1000;
             const cumHps    = Number(cumHashes) / cumDur;
@@ -245,8 +246,28 @@ export async function runWorker(privateKey, label) {
             const findsTxt  = sessionFinds > 0 ? ` · ${sessionFinds} finds` : '';
             process.stdout.write(chalk.gray(`     ${label} ${mh}M tries · ${rate} · ${cumDur.toFixed(0)}s${findsTxt}\n`));
           },
-        });
-        // adapt fields
+        };
+
+        if (config.USE_CPU_HYBRID && config.WORKER_THREADS > 0) {
+          // GPU + CPU race — first to find wins
+          const stopSignal = { stopped: false };
+          const cpuOpts = {
+            chainId:      CHAIN_ID,
+            contractAddr: CONTRACT,
+            minerAddr:    account.address,
+            epoch:        epochAtStart,
+            difficulty:   state.difficulty,
+            threads:      config.WORKER_THREADS,
+          };
+          const [gpuResult, cpuResult] = await Promise.all([
+            mineFn(mineOpts).then(r => { stopSignal.stopped = true; return { ...r, source: 'gpu' }; }),
+            cpuMineEpoch(cpuOpts, stopSignal).then(r => r),
+          ]);
+          result = gpuResult.found ? gpuResult : cpuResult.found ? cpuResult : gpuResult;
+        } else {
+          result = await mineFn(mineOpts);
+        }
+
         result.hashesPerSec = result.hps;
       }
     }

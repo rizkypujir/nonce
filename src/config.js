@@ -47,6 +47,7 @@ export const config = {
   MULTI_GPU:         bool('MULTI_GPU', false),
   MAX_GPUS:          Math.max(1, Math.floor(num('MAX_GPUS', 99))),
   GPU_BATCH:         Math.max(1024, Math.floor(num('GPU_BATCH', 4 * 1024 * 1024))),
+  USE_CPU_HYBRID:    bool('USE_CPU_HYBRID', false),
   ROOT,
 };
 
