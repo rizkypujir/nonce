@@ -1,109 +1,152 @@
 /**
- * gpuMulti.js — orchestrate N GPUs in parallel for one challenge.
+ * gpuMulti.js — orchestrate N GPUs in parallel using Worker Threads.
  *
- * Splits nonce space across all GPUs. First GPU to find wins, others abort.
+ * Each GPU runs in its own thread (true parallel, no GIL/event-loop blocking).
+ * First GPU to find a nonce wins; all others are stopped.
  */
 
-import { GPUMiner, listAllGPUs, buildChallenge } from './gpuMiner.js';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import { listAllGPUs, buildChallenge } from './gpuMiner.js';
 
-let _miners = null;       // GPUMiner instances per device
-let _initLog = '';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const THREAD_PATH = path.join(__dirname, 'gpuThread.js');
 
-export function ensureMultiGPU(maxGPUs = Infinity) {
-  if (_miners) return _miners;
-  const all = listAllGPUs();
-  const use = all.slice(0, Math.min(all.length, maxGPUs));
-  _miners = use.map((d, i) => {
-    const m = new GPUMiner(i);
-    m.init();
-    return m;
-  });
-  _initLog = `${_miners.length} GPU(s): ${_miners.map(m => m.deviceName).join(', ')}`;
-  return _miners;
-}
+let _gpuList = null;
+let _initLog  = '';
 
 export function multiGpuInfo() { return _initLog; }
-export function gpuCount() { return _miners ? _miners.length : 0; }
+export function gpuCount()     { return _gpuList ? _gpuList.length : 0; }
+
+function getGPUList(maxGPUs = 99) {
+  if (!_gpuList) {
+    _gpuList = listAllGPUs().slice(0, maxGPUs);
+    _initLog = `${_gpuList.length} GPU(s): ${_gpuList.map(g => g.name).join(', ')}`;
+  }
+  return _gpuList;
+}
+
+// Kept for compat — no-op since threads init their own context
+export function ensureMultiGPU(maxGPUs = 99) {
+  getGPUList(maxGPUs);
+  return _gpuList;
+}
 
 /**
- * Mine one epoch on ALL GPUs in parallel, with each device searching a different
- * portion of the nonce space. First GPU to find returns; others stop.
- *
- * @param {object} opts (same as gpuMineEpoch + multiBatchSize)
+ * Mine one epoch using ALL GPUs in parallel (each in its own Worker Thread).
+ * Returns { found, nonce, target, totalHashes, hps, ms, gpuIdx }
  */
 export async function multiGpuMineEpoch(opts) {
-  const miners = ensureMultiGPU(opts.maxGPUs);
-  const N = miners.length;
-
-  const chal = buildChallenge(opts.chainId, opts.contractAddr, opts.minerAddr, opts.epoch);
-  for (const m of miners) {
-    m.batchSize = opts.batchSize || (16 * 1024 * 1024);
-    m.setChallenge(chal, opts.difficulty);
-  }
+  const gpus = getGPUList(opts.maxGPUs || 99);
+  const N = gpus.length;
+  const batchSize = opts.batchSize || (16 * 1024 * 1024);
 
   const RAND_MAX = 1n << 60n;
-  // Each GPU gets a different starting region in nonce space
-  const baseNonces = miners.map((_, i) =>
-    (BigInt(Math.floor(Math.random() * 1e15)) + BigInt(i) * (1n << 50n)) % RAND_MAX
+  const startNonces = gpus.map((_, i) =>
+    ((BigInt(Math.floor(Math.random() * 1e15)) + BigInt(i) * (1n << 52n)) % RAND_MAX).toString()
   );
 
   const started = Date.now();
-  let totalHashes = 0n;
+  const perGpuAttempts = new Array(N).fill(0n);
+  const perGpuHps      = new Array(N).fill(0);
   let lastProgress = Date.now();
   const TO = opts.timeoutMs || 16 * 60 * 1000;
 
-  let foundResult = null;
+  return new Promise((resolve) => {
+    const workers = [];
+    let resolved = false;
 
-  // Simple round-robin: each tick, run one batch on each GPU sequentially
-  // (kernel launches are async on driver side, finish blocks). But we use
-  // separate worker promises for each GPU to overlap host-side work.
-  let stop = false;
-
-  async function runOneGPU(idx) {
-    const m = miners[idx];
-    while (!stop) {
-      if (opts.shouldStop && opts.shouldStop()) { stop = true; return; }
-      if (Date.now() - started > TO) { stop = true; return; }
-
-      const r = m.runBatch(baseNonces[idx]);
-      totalHashes += BigInt(r.attempts);
-      baseNonces[idx] += BigInt(m.batchSize);
-      if (baseNonces[idx] > RAND_MAX) baseNonces[idx] = BigInt(Math.floor(Math.random() * 1e15));
-
-      if (r.found) {
-        foundResult = { found: true, nonce: r.nonce, target: r.target, totalHashes, ms: Date.now() - started, gpuIdx: idx };
-        stop = true;
-        return;
+    function stopAll() {
+      for (const w of workers) {
+        try { w.postMessage({ type: 'stop' }); w.terminate(); } catch {}
       }
-
-      // Yield occasionally
-      if (Date.now() - lastProgress > 2000) {
-        const dur = (Date.now() - started) / 1000;
-        const hps = Number(totalHashes) / dur || 0;
-        if (opts.onProgress) opts.onProgress({ totalHashes, hps, dur });
-        lastProgress = Date.now();
-      }
-      // tiny yield so all GPU promises can interleave
-      await new Promise(r => setImmediate(r));
     }
-  }
 
-  // Run all GPUs concurrently
-  await Promise.all(miners.map((_, i) => runOneGPU(i)));
+    function totalHashes() {
+      return perGpuAttempts.reduce((a, b) => a + b, 0n);
+    }
 
-  if (foundResult) {
-    foundResult.hps = Number(foundResult.totalHashes) / ((Date.now() - started) / 1000) || 0;
-    return foundResult;
-  }
-  const hps = Number(totalHashes) / ((Date.now() - started) / 1000) || 0;
-  return { found: false, totalHashes, hps, timeout: Date.now() - started > TO, stopped: stop };
+    function totalHps() {
+      return perGpuHps.reduce((a, b) => a + b, 0);
+    }
+
+    for (let i = 0; i < N; i++) {
+      const w = new Worker(THREAD_PATH, {
+        workerData: { deviceIndex: i, batchSize },
+      });
+
+      w.on('message', (msg) => {
+        if (msg.type === 'ready') {
+          // GPU ready — send mine command
+          w.postMessage({
+            type:         'mine',
+            chainId:      opts.chainId.toString(),
+            contractAddr: opts.contractAddr,
+            minerAddr:    opts.minerAddr,
+            epoch:        opts.epoch.toString(),
+            difficulty:   opts.difficulty.toString(),
+            startNonce:   startNonces[i],
+          });
+        } else if (msg.type === 'progress') {
+          perGpuAttempts[i] = BigInt(msg.attempts);
+          perGpuHps[i]      = msg.hps;
+
+          if (Date.now() - lastProgress > 2000) {
+            const dur = (Date.now() - started) / 1000;
+            const th  = totalHashes();
+            const hps = totalHps();
+            if (opts.onProgress) opts.onProgress({ totalHashes: th, hps, dur });
+            lastProgress = Date.now();
+          }
+        } else if (msg.type === 'found') {
+          if (resolved) return;
+          resolved = true;
+          perGpuAttempts[i] = BigInt(msg.attempts);
+          const th  = totalHashes();
+          const dur = (Date.now() - started) / 1000;
+          const hps = Number(th) / dur || 0;
+          stopAll();
+          resolve({
+            found:       true,
+            nonce:       BigInt(msg.nonce),
+            target:      BigInt(msg.target),
+            totalHashes: th,
+            hps,
+            ms:          msg.ms,
+            gpuIdx:      i,
+          });
+        }
+      });
+
+      w.on('error', (err) => {
+        console.error(`[GPU ${i}] thread error: ${err.message}`);
+      });
+
+      w.on('exit', (code) => {
+        if (!resolved && code !== 0) {
+          console.error(`[GPU ${i}] thread exited with code ${code}`);
+        }
+      });
+
+      workers.push(w);
+    }
+
+    // Timeout safety
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        stopAll();
+        const th  = totalHashes();
+        const dur = (Date.now() - started) / 1000;
+        resolve({ found: false, totalHashes: th, hps: Number(th) / dur || 0, timeout: true });
+      }
+    }, TO);
+  });
 }
 
 export function destroyMultiGPU() {
-  if (_miners) {
-    for (const m of _miners) {
-      try { m.destroy(); } catch {}
-    }
-    _miners = null;
-  }
+  _gpuList = null;
+  _initLog  = '';
 }
