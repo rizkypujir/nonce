@@ -9,18 +9,21 @@ const ROOT       = path.join(__dirname, '..');
 
 dotenv.config({ path: path.join(ROOT, '.env') });
 
-function num(name, fallback) {
-  const v = process.env[name];
-  if (v === undefined || v === '') return fallback;
-  const n = parseFloat(v);
-  return isNaN(n) ? fallback : n;
-}
-
 function bool(name, fallback = false) {
-  const v = (process.env[name] || '').toLowerCase().trim();
+  const raw = (process.env[name] || '');
+  // Strip inline comments (e.g. "true  # comment")
+  const v = raw.split('#')[0].toLowerCase().trim();
   if (v === 'true' || v === '1' || v === 'yes') return true;
   if (v === 'false' || v === '0' || v === 'no') return false;
   return fallback;
+}
+
+function num(name, fallback) {
+  const raw = (process.env[name] || '');
+  const v = raw.split('#')[0].trim();
+  if (v === '') return fallback;
+  const n = parseFloat(v);
+  return isNaN(n) ? fallback : n;
 }
 
 export const CONTRACT  = '0xE7bADd12bdf070e925A55A98c981f3aBAB4f20cc';
