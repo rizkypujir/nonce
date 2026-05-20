@@ -19,6 +19,7 @@ import chalk from 'chalk';
 import { CONTRACT, CHAIN_ID, EPOCH_BLOCKS, MAX_MINTS_PER_BLOCK, ABI, config } from './config.js';
 import { rpcPool, getWalletClient } from './rpc.js';
 import { gpuMineEpoch, ensureGPU, gpuInfo } from './gpu/gpuWorker.js';
+import { multiGpuMineEpoch, ensureMultiGPU, multiGpuInfo, gpuCount } from './gpu/gpuMulti.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -208,22 +209,29 @@ export async function runWorker(privateKey, label) {
       // ----- GPU path -----
       let gpuName = '';
       try {
-        ensureGPU();
-        gpuName = gpuInfo();
+        if (config.MULTI_GPU) {
+          ensureMultiGPU(config.MAX_GPUS);
+          gpuName = multiGpuInfo();
+        } else {
+          ensureGPU();
+          gpuName = gpuInfo();
+        }
       } catch (e) {
-        console.log(chalk.yellow(`  ⚠ ${label} GPU init failed (${e.message.slice(0,60)}), falling back to CPU`));
+        console.log(chalk.yellow(`  ⚠ ${label} GPU init failed (${e.message.slice(0,80)}), falling back to CPU`));
         config.USE_GPU = false;
       }
 
       if (config.USE_GPU) {
         console.log(chalk.gray(`  ⛏  ${label} epoch ${epochAtStart} GPU ${gpuName} (diff 2^${diffLog2})...`));
-        result = await gpuMineEpoch({
+        const mineFn = config.MULTI_GPU ? multiGpuMineEpoch : gpuMineEpoch;
+        result = await mineFn({
           chainId:      CHAIN_ID,
           contractAddr: CONTRACT,
           minerAddr:    account.address,
           epoch:        epochAtStart,
           difficulty:   state.difficulty,
           batchSize:    config.GPU_BATCH,
+          maxGPUs:      config.MAX_GPUS,
           shouldStop:   () => false,
           onProgress: ({ totalHashes, hps, dur }) => {
             // Cumulative session display

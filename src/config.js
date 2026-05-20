@@ -41,6 +41,8 @@ export const config = {
   DRY_RUN:           bool('DRY_RUN', false),
   SKIP_HARD_EPOCH:   bool('SKIP_HARD_EPOCH', false),
   USE_GPU:           bool('USE_GPU', true),
+  MULTI_GPU:         bool('MULTI_GPU', false),
+  MAX_GPUS:          Math.max(1, Math.floor(num('MAX_GPUS', 99))),
   GPU_BATCH:         Math.max(1024, Math.floor(num('GPU_BATCH', 4 * 1024 * 1024))),
   ROOT,
 };

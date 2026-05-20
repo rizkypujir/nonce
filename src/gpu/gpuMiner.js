@@ -99,9 +99,10 @@ function getStringInfo(infoFn, handle, paramName) {
 }
 
 /**
- * Auto-pick the best NVIDIA/AMD GPU. Returns { platform, device, name }.
+ * List ALL GPU devices across all platforms, scored by priority.
+ * Returns array sorted highest-score-first.
  */
-export function pickBestDevice() {
+export function listAllGPUs() {
   bind();
   const cnt = [0];
   let rc = cl.GetPlatformIDs(0, null, cnt);
@@ -113,8 +114,7 @@ export function pickBestDevice() {
   check(rc, 'GetPlatformIDs(fetch)');
   const plats = koffi.decode(platArr, koffi.array('void *', cnt[0]));
 
-  let best = null;
-  let bestScore = -1;
+  const out = [];
   for (const plat of plats) {
     const dCnt = [0];
     rc = cl.GetDeviceIDs(plat, CL_DEVICE_TYPE_GPU, 0, null, dCnt);
@@ -124,7 +124,6 @@ export function pickBestDevice() {
     const devs = koffi.decode(devArr, koffi.array('void *', dCnt[0]));
     for (const dev of devs) {
       const name = getStringInfo(cl.GetDeviceInfo, dev, CL_DEVICE_NAME);
-      // Prefer NVIDIA > AMD > Intel; score by compute units
       const cuBuf = Buffer.alloc(4);
       cl.GetDeviceInfo(dev, CL_DEVICE_MAX_COMPUTE_UNITS, 4, cuBuf, null);
       const cu = cuBuf.readUInt32LE(0);
@@ -132,20 +131,24 @@ export function pickBestDevice() {
       if (/nvidia|geforce|rtx|gtx/i.test(name)) prio = 1000;
       else if (/amd|radeon/i.test(name))        prio = 500;
       else if (/intel/i.test(name))             prio = 100;
-      const score = prio + cu;
-      if (score > bestScore) {
-        bestScore = score;
-        best = { platform: plat, device: dev, name, computeUnits: cu };
-      }
+      out.push({
+        platform: plat, device: dev, name, computeUnits: cu, score: prio + cu,
+      });
     }
   }
-  if (!best) throw new Error('No GPU device available');
-  return best;
+  out.sort((a, b) => b.score - a.score);
+  if (!out.length) throw new Error('No GPU device available');
+  return out;
+}
+
+export function pickBestDevice() {
+  return listAllGPUs()[0];
 }
 
 export class GPUMiner {
-  constructor() {
+  constructor(deviceIndex = 0) {
     bind();
+    this.deviceIndex = deviceIndex;
     this.ctx = null;
     this.queue = null;
     this.program = null;
@@ -166,7 +169,11 @@ export class GPUMiner {
   }
 
   init() {
-    const dev = pickBestDevice();
+    const all = listAllGPUs();
+    if (this.deviceIndex >= all.length) {
+      throw new Error(`Device index ${this.deviceIndex} out of range (only ${all.length} GPUs)`);
+    }
+    const dev = all[this.deviceIndex];
     this.deviceName = dev.name;
     this.computeUnits = dev.computeUnits;
 
