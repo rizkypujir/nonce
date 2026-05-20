@@ -1,7 +1,7 @@
 # $NONCE GPU Miner
 
 Multi-wallet PoW miner untuk **$NONCE** token di Base chain.
-GPU OpenCL kernel (zero Python, zero compiler) — **~300 MH/s di RTX 3050 Laptop**.
+GPU OpenCL kernel (zero Python, zero compiler) — support **multi-GPU + CPU hybrid**.
 
 Contract: [`0xE7bADd12bdf070e925A55A98c981f3aBAB4f20cc`](https://basescan.org/address/0xE7bADd12bdf070e925A55A98c981f3aBAB4f20cc)
 Site: https://nonceagent8004.com
@@ -11,146 +11,123 @@ Site: https://nonceagent8004.com
 ## Requirements
 
 - **Node.js 20+** ([download](https://nodejs.org))
-- **GPU NVIDIA / AMD / Intel** dengan driver terbaru (OpenCL.dll harus ada di `C:\Windows\System32\` — biasanya udah otomatis pas install GPU driver)
+- **GPU NVIDIA / AMD / Intel** dengan driver terbaru (OpenCL support)
 - **Git** ([download](https://git-scm.com))
-- **ETH di Base** ≥ 0.001 ETH per wallet buat gas (gas Base murah parah, ~$0.001/tx)
+- **ETH di Base** ≥ 0.001 ETH per wallet buat gas
 
-Cek GPU kebaca atau gak:
-```cmd
-nvidia-smi
+Cek GPU:
+```bash
+nvidia-smi          # NVIDIA
+clinfo -l           # semua GPU (Linux)
 ```
 
 ---
 
 ## Install
 
-### 1. Clone repo
-
-```cmd
+```bash
 git clone https://github.com/rizkypujir/nonce.git
 cd nonce
-```
-
-### 2. Install dependencies
-
-```cmd
 npm install
+cp .env.example .env
+cp wallets.txt.example wallets.txt
 ```
 
-### 3. Setup config
-
-Copy file template:
-```cmd
-copy .env.example .env
-copy wallets.txt.example wallets.txt
-```
-
-### 4. Edit `.env`
-
-Buka pakai text editor, isi minimal:
-
-```env
-RPC_URL=https://mainnet.base.org
-USE_GPU=true
-DRY_RUN=false
-```
-
-**Recommended**: pakai RPC pribadi (Alchemy/QuickNode/Ankr) buat latency lebih rendah:
-```env
-RPC_URL=https://rpc.ankr.com/base/YOUR_API_KEY
-```
-
-### 5. Edit `wallets.txt`
-
-Satu private key per baris. Hapus baris contoh, ganti dengan PK lo:
-
-```
-0xYOUR_PRIVATE_KEY_HERE_64_HEX_CHARS
-```
-
-⚠️ **Pastikan wallet udah punya minimal 0.001 ETH di Base mainnet**.
+Edit `.env` dan `wallets.txt` sesuai setup lo.
 
 ---
 
 ## Run
 
-### Cek state contract dulu (gak mining):
-```cmd
-node src/index.js stats
-```
-
-Output bakal kayak gini:
-```
-Contract state:
-  Total mints  : 7484
-  Difficulty   : 2^218.0
-  Block        : 46209525
-  Epoch        : 77015
-  Genesis      : ✓ complete (mining live)
-1 wallet(s) loaded
-```
-
-### Bench GPU lo dulu (optional):
-```cmd
-node src/gpu/test-bench.js
-```
-
-Expected hash rate:
-- RTX 3050 Laptop: ~300 MH/s
-- RTX 4060: ~700 MH/s
-- RTX 4090: ~3 GH/s
-- AMD RX 7900: ~2 GH/s
-- CPU fallback (i5-12500H): ~720 KH/s (400x lebih lambat)
-
-### Mulai mining:
-```cmd
-node src/index.js mine
-```
-
-Output:
-```
-[w1] 0x3F8f997E... balance=0.00268 ETH
-⛏  [w1] epoch 77015 GPU NVIDIA GeForce RTX 3050 Laptop GPU (16 CUs) (diff 2^218.0)...
-   [w1] 620.8M tries · 308.4 MH/s · 2s
-   [w1] 1241.5M tries · 309.1 MH/s · 4s
-   ...
-✓ [w1] FOUND nonce after 18000.5M hashes in 60s @ 300 MH/s
-📤 [w1] submitting tx... ✓ 0x1a2b3c4d5e6f...
-   https://basescan.org/tx/0x1a2b3c4d5e6f...
+```bash
+node src/index.js stats    # cek state contract
+node src/index.js mine     # mulai mining
+node src/gpu/test-bench.js # bench hash rate
 ```
 
 `Ctrl+C` untuk stop.
 
 ---
 
-## Config Tweaks
+## Config (.env)
 
-Edit `.env`:
+### Wajib
+```env
+RPC_URL=https://mainnet.base.org
+```
 
-| Variable | Default | Function |
-|---|---|---|
-| `USE_GPU` | `true` | `false` = pakai CPU 14 thread |
-| `GPU_BATCH` | `4194304` | Nonces per kernel launch (4M). 8M kalau GPU lo ≥8GB VRAM |
-| `GAS_MULTIPLIER` | `1.2` | Multiplier base fee (1.0 = bare minimum, 2.0 = aggressive) |
-| `PRIORITY_GWEI` | `0.01` | Tip — naikin kalau lambat confirm |
-| `MAX_GAS_GWEI` | `5` | Cap total gas (Base biasanya <0.1 gwei) |
-| `PARALLEL_WORKERS` | `1` | Wallet parallel — biarin 1 (GPU shared, gak ada gunanya parallel) |
-| `WORKER_THREADS` | `14` | CPU thread count (kalau USE_GPU=false) |
-| `TARGET_MINTS_PER_WALLET` | `0` | 0 = unlimited, >0 = stop setelah N successful |
-| `DRY_RUN` | `false` | `true` = simulate, gak broadcast |
+### GPU Settings
+```env
+USE_GPU=true                # false = CPU only
+MULTI_GPU=true              # true = pakai SEMUA GPU detected
+MAX_GPUS=4                  # cap jumlah GPU (default 99 = semua)
+GPU_BATCH=33554432          # nonces per kernel launch (32M optimal untuk 3090/4090)
+```
+
+### CPU Hybrid (GPU + CPU bareng)
+```env
+USE_CPU_HYBRID=true         # CPU ikut mining bareng GPU
+WORKER_THREADS=180          # jumlah CPU thread (set = jumlah core - 6)
+```
+
+### Gas
+```env
+GAS_MULTIPLIER=1.2
+PRIORITY_GWEI=0.01
+MAX_GAS_GWEI=5
+```
+
+### Lainnya
+```env
+PARALLEL_WORKERS=1          # wallet concurrent (biarin 1, GPU shared)
+TARGET_MINTS_PER_WALLET=0   # 0 = unlimited
+DRY_RUN=false               # true = simulate, gak broadcast
+```
 
 ---
 
-## Multi-Wallet
+## Performance
 
-Tambah private key di `wallets.txt`:
-```
-0xWALLET1_PRIVATE_KEY
-0xWALLET2_PRIVATE_KEY
-0xWALLET3_PRIVATE_KEY
+| Setup | Hash Rate | Find Time (diff 2^218) |
+|---|---|---|
+| RTX 3050 Laptop (1 GPU) | ~300 MH/s | ~15 min |
+| RTX 3090 (1 GPU) | ~1.8 GH/s | ~2.5 min |
+| 4x RTX 3090 | ~7.2 GH/s | ~40 sec |
+| 4x RTX 3090 + 96 CPU | ~8.5 GH/s | ~35 sec |
+| RTX 5090 (1 GPU) | ~5.7 GH/s | ~1 min |
+
+GPU_BATCH tuning:
+- RTX 3050 (4GB): `GPU_BATCH=4194304` (4M)
+- RTX 3090 (24GB): `GPU_BATCH=33554432` (32M)
+- RTX 4090/5090: `GPU_BATCH=67108864` (64M)
+
+---
+
+## Multi-GPU Setup (VPS/Server)
+
+### Linux (Ubuntu/Debian)
+```bash
+# Install OpenCL runtime
+sudo apt install -y ocl-icd-libopencl1 clinfo
+sudo apt install -y libnvidia-compute-570   # sesuaikan versi driver
+
+# Kalau clinfo gak detect GPU:
+sudo mkdir -p /etc/OpenCL/vendors
+echo "libnvidia-opencl.so.1" | sudo tee /etc/OpenCL/vendors/nvidia.icd
+
+# Verify
+clinfo -l    # harus list semua GPU
 ```
 
-Setiap wallet punya **per-address challenge** (unstealable from mempool). Bakal mining giliran (1 GPU shared). Total reward = jumlah wallet × reward per wallet.
+### .env untuk multi-GPU
+```env
+USE_GPU=true
+MULTI_GPU=true
+MAX_GPUS=4
+GPU_BATCH=33554432
+USE_CPU_HYBRID=true
+WORKER_THREADS=90
+```
 
 ---
 
@@ -158,35 +135,9 @@ Setiap wallet punya **per-address challenge** (unstealable from mempool). Bakal 
 
 - Algoritma: `keccak256(abi.encode(challenge, nonce)) < currentDifficulty`
 - Challenge: `keccak256(abi.encode(chainId, contract, miner, epoch))`
-- Per-(miner, epoch) → unstealable
-- Block cap: 10 mints/block
 - Epoch: 600 blocks (~20 menit di Base)
-- Reward halving tiap 100k mints (era)
-
-Expected find time @ 300 MH/s:
-- Diff 2^218 (current): **~15 menit avg**, range 5-45 min
-- Diff 2^220: ~3-5 menit
-- Diff 2^222: ~12-20 menit
-
----
-
-## Troubleshooting
-
-**`OpenCL.dll not loadable`** → install/update GPU driver:
-- NVIDIA: https://www.nvidia.com/Download/index.aspx
-- AMD: https://www.amd.com/en/support
-- Intel: https://www.intel.com/content/www/us/en/download-center/home.html
-
-**`No GPU device available`** → driver gak include OpenCL runtime. Reinstall driver lengkap.
-
-**`balance too low`** → top up wallet di Base mainnet (bridge dari L1, Coinbase Base bridge, dll).
-
-**RPC error 500** → ganti RPC. Free yang stabil:
-- `https://mainnet.base.org`
-- `https://base.llamarpc.com`
-- `https://base-rpc.publicnode.com`
-
-**Hash rate kecil (< 50 MH/s di GPU bagus)** → GPU lo lagi kepake program lain (browser, game). Tutup yang gak perlu.
+- Block cap: 10 mints/block
+- Reward: 100 NONCE per mint (halving tiap 100k mints)
 
 ---
 
@@ -194,30 +145,44 @@ Expected find time @ 300 MH/s:
 
 ```
 src/
-├── index.js          # CLI entry (stats, mine)
+├── index.js          # CLI (stats, mine)
 ├── miner.js          # Wallet orchestrator + tx submit
-├── hash.js           # Native CPU keccak (fallback)
+├── config.js         # env loader, ABI, constants
+├── hash.js           # Native CPU keccak
 ├── worker.js         # CPU worker thread
-├── rpc.js            # viem RPC pool with failover
-├── config.js         # env loader, ABI, EPOCH_BLOCKS=600
-└── gpu/
-    ├── kernel.cl     # OpenCL keccak256 kernel (compiled at runtime)
-    ├── gpuMiner.js   # OpenCL host code via koffi FFI
-    ├── gpuWorker.js  # GPU mining loop wrapper
-    └── test-bench.js # Hash rate benchmark
+├── rpc.js            # viem RPC pool + failover
+├── gpu/
+│   ├── kernel.cl     # OpenCL keccak256 kernel
+│   ├── gpuMiner.js   # OpenCL host (FFI via koffi)
+│   ├── gpuMulti.js   # Multi-GPU orchestrator (Worker Threads)
+│   ├── gpuThread.js  # Per-GPU worker thread
+│   ├── gpuWorker.js  # Single-GPU wrapper
+│   └── test-bench.js # Hash rate benchmark
+└── cpu/
+    ├── cpuMiner.js   # CPU thread pool manager
+    └── cpuThread.js  # Per-CPU worker thread
 ```
+
+---
+
+## Troubleshooting
+
+**`Cannot load OpenCL library`** → install GPU driver + OpenCL runtime (lihat Multi-GPU Setup)
+
+**`GPU init failed, falling back to CPU`** → `.env` inline comments breaking parser. Hapus komentar di baris yang sama dengan value.
+
+**`balance too low`** → top up wallet di Base (bridge/Coinbase)
+
+**Hash rate rendah** → naikin `GPU_BATCH`, tutup program lain yang pakai GPU
+
+**`MULTI_GPU=true` tapi cuma 1 GPU jalan** → pastikan `clinfo -l` detect semua GPU. Kalau gak, fix OpenCL ICD registration.
 
 ---
 
 ## Disclaimer
 
-⚠️ **Use at your own risk**. Lo bertanggung jawab atas private key sendiri. Repo ini gak nyimpan/transmit PK ke server manapun — semua local. Tapi tetep:
-- Jangan commit `.env` atau `wallets.txt`
-- Jangan share screenshot terminal kalau ada PK keliatan
-- Backup wallet di tempat aman
-
-Mining gas burn nyata. Kalau diff naik gila-gilaan, biaya gas bisa lebih besar dari reward — pantau terus.
+⚠️ Use at your own risk. Private key lo gak pernah dikirim kemana-mana — semua local. Jangan commit `.env` atau `wallets.txt`.
 
 ## License
 
-MIT — author **KYYCODE**
+MIT — **KYYCODE**
